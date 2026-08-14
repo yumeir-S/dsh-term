@@ -34,7 +34,7 @@ dsh plugin --profile term add dsh-term
 From Git:
 
 ```sh
-dsh plugin --profile term add github:<you>/dsh-term
+dsh plugin --profile term add github:yumeir-S/dsh-term
 ```
 
 `dsh plugin` detects the `dsh.bundle.patch` declaration and appends `dsh-term` to the profile's `dsh.profile.bundles` automatically.
