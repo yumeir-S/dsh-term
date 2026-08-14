@@ -25,21 +25,13 @@
 - `dsh` CLI（`@deepseek-ai/dsh`），例如 `npm i -g @deepseek-ai/dsh`
 - 模型凭据：`DEEPSEEK_API_KEY`（或写入 `~/.dsh/.credentials.yaml`）
 
-本地开发（推荐先这样试，改代码即时生效）：
-
-```sh
-cd dsh-term                # 进入本仓库目录
-pnpm install               # 装 dsh-term 的依赖（link 协议不会自动装）
-dsh plugin --profile term add link:.
-```
-
 从 npm 安装：
 
 ```sh
 dsh plugin --profile term add dsh-term
 ```
 
-从 Git 安装（先 push 到 GitHub 后）：
+从 Git 安装：
 
 ```sh
 dsh plugin --profile term add github:<you>/dsh-term
