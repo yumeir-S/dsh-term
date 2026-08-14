@@ -8,12 +8,13 @@ It reuses the harness core (Agent / Session / tools / skills / sandbox) and laye
 
 ## Features
 
-- Pure-terminal REPL via `dsh --profile term`
-- Streaming output: assistant text prints token-by-token; reasoning is dimmed
-- Tool activity: `⚙ name args` and `↳ result preview`
-- **Approval in the terminal**: `[approve] … [y/N]` prompts before permission-gated tools, so the default `workspace-write` policy works interactively
+- Pure-terminal REPL via `dsh --profile term`, with a Claude Code-style interface
+- Streaming output: assistant text prints token-by-token; reasoning collapses to a single `✳ Thinking…` line
+- **Line-level Markdown highlighting**: `#` headings, `**bold**`, `` `code` ``, `-`/`1.` lists, `>` quotes, and ```` ``` ```` code blocks
+- Tool activity: `⚙ name` (bold) with an args preview, green `✓` results
+- **Approval in the terminal**: `⚠ tool` prompts before permission-gated tools, so the default `workspace-write` policy works interactively
 - **Questions in the terminal**: `ask_user_question` renders questions and options; answer by number or free text
-- Session persistence: `--resume <sessionId>` resumes a prior session
+- Session persistence: `--resume <sessionId>` resumes a prior session; `/model` switches models mid-session
 - Zero-build: `lib/` is checked in and ready to run
 
 ## Install
@@ -23,6 +24,14 @@ Prerequisites:
 - Node.js ≥ 22 and [pnpm](https://pnpm.io/) (`dsh plugin` forwards to pnpm)
 - the `dsh` CLI (`@deepseek-ai/dsh`), e.g. `npm i -g @deepseek-ai/dsh`
 - model credentials: `DEEPSEEK_API_KEY` (or `~/.dsh/.credentials.yaml`)
+
+Local development (try this first; edits take effect immediately):
+
+```sh
+cd dsh-term                # inside this repo
+pnpm install               # install dsh-term's deps (link does not install them)
+dsh plugin --profile term add link:.
+```
 
 From npm:
 
@@ -92,7 +101,7 @@ dsh-term/
 2. Polls `agent.session.events` (the append-only `{ seq, time, type, data }` log) and renders `assistant/chunk`, `assistant/message`, `tool/call`, `tool/result`, and `turn/end` to stdout.
 3. Each input line becomes `agent.followup(createUserMessage(...))`; the driver waits for `agent.whenIdle()` before returning to the prompt.
 4. Wires the terminal in as the harness's human answerer:
-   - Listens to `approval/request` (a waterfall event), renders `[approve] tool` + reason, reads y/N, and returns `allowed-once` / `rejected` / `cancelled`.
+   - Listens to `approval/request` (a waterfall event), renders `⚠ tool` + reason, reads y/N, and returns `allowed-once` / `rejected` / `cancelled`.
    - Registers a `ctx.userQuestions.registerProvider(...)` provider that renders each question and its options, parses numbers/free text, and returns the structured answer.
 5. On exit: `sessions.flush()` + `handle.dispose()` + `ctx.appExit(0)`.
 
@@ -100,6 +109,7 @@ All input goes through a rebuildable readline manager: `ask(prompt, signal)` rea
 
 ## Known limitations
 
+- **Not a full-screen TUI**: it is a line-based REPL with ANSI styling, not an alt-screen TUI (no fixed bottom input box, `/` command menu, or arrow-key history); a full-screen version needs a TUI framework and is deferred.
 - **No mid-turn steering**: you cannot inject a new instruction while a turn runs — Ctrl-C cancels the current turn instead; `agent.steer()` is future work.
 - **Color auto-degrades** on non-TTY / `NO_COLOR` / `TERM=dumb`.
 

@@ -8,12 +8,13 @@
 
 ## 特性
 
-- 纯终端交互，`dsh --profile term` 即进 REPL
-- 流式输出：助手文本实时逐字打印，思考内容（reasoning）以暗色显示
-- 工具调用可视化：`⚙ 工具名 参数` 与 `↳ 结果摘要`
-- **权限审批接入终端**：工具执行前弹 `[approve] … [y/N]` 确认，默认 `workspace-write` 权限也能交互放行
+- 纯终端交互，`dsh --profile term` 即进 REPL，Claude Code 风格界面
+- 流式输出：助手文本实时逐字打印；思考过程折叠为一行 `✳ Thinking…`，不刷屏
+- **行级 Markdown 高亮**：`#` 标题、`**加粗**`、`` `代码` ``、`-`/`1.` 列表、`>` 引用、```` ``` ```` 代码块
+- 工具调用可视化：`⚙ 工具名`（加粗）+ 参数预览，结果以绿色 `✓` 显示
+- **权限审批接入终端**：工具执行前弹 `⚠ 工具名` 确认，默认 `workspace-write` 权限也能交互放行
 - **提问接入终端**：`ask_user_question` 在终端里渲染问题与选项，直接输入编号或文本作答
-- 会话持久化：`--resume <sessionId>` 恢复历史会话
+- 会话持久化：`--resume <sessionId>` 恢复历史会话；`/model` 会话内切模型
 - 开箱即用：`lib/` 已提交编译产物，安装后无需构建
 
 ## 安装
@@ -24,7 +25,15 @@
 - `dsh` CLI（`@deepseek-ai/dsh`），例如 `npm i -g @deepseek-ai/dsh`
 - 模型凭据：`DEEPSEEK_API_KEY`（或写入 `~/.dsh/.credentials.yaml`）
 
-从 npm 安装并初始化 profile：
+本地开发（推荐先这样试，改代码即时生效）：
+
+```sh
+cd dsh-term                # 进入本仓库目录
+pnpm install               # 装 dsh-term 的依赖（link 协议不会自动装）
+dsh plugin --profile term add link:.
+```
+
+从 npm 安装：
 
 ```sh
 dsh plugin --profile term add dsh-term
@@ -92,7 +101,7 @@ dsh-term/
 2. 轮询 `agent.session.events`（`{ seq, time, type, data }` 的只追加事件流），按 `assistant/chunk`、`assistant/message`、`tool/call`、`tool/result`、`turn/end` 渲染到 stdout。
 3. 每行输入调用 `agent.followup(createUserMessage(…))`，等待 `agent.whenIdle()` 结算后再回到提示符。
 4. 把终端注册为 harness 的「人类应答方」：
-   - 监听 `approval/request`（waterfall 事件），渲染 `[approve] 工具名` + 原因，读取 y/N，返回 `allowed-once` / `rejected` / `cancelled`。
+   - 监听 `approval/request`（waterfall 事件），渲染 `⚠ 工具名` + 原因，读取 y/N，返回 `allowed-once` / `rejected` / `cancelled`。
    - 通过 `ctx.userQuestions.registerProvider(...)` 注册提问提供方，渲染每个问题及其选项，解析编号/自由文本，返回结构化答案。
 5. 退出时 `sessions.flush()` + `handle.dispose()` + `ctx.appExit(0)`。
 
@@ -100,6 +109,7 @@ dsh-term/
 
 ## 已知限制
 
+- **非全屏 TUI**：当前是「行式 REPL + ANSI 视觉增强」，不是 alt-screen 全屏（没有底部固定输入框、`/` 命令菜单、上下键历史）；全屏版本需引入 TUI 框架，暂缓。
 - **中途引导（steering）未做**：运行中不能主动插入新指令，只能 Ctrl-C 取消当前轮次；`agent.steer()` 留作后续。
 - **无彩色时自动降级**：非 TTY / `NO_COLOR` / `TERM=dumb` 下关闭 ANSI 颜色。
 
