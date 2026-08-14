@@ -11,6 +11,8 @@ It reuses the harness core (Agent / Session / tools / skills / sandbox) and laye
 - Pure-terminal REPL via `dsh --profile term`
 - Streaming output: assistant text prints token-by-token; reasoning is dimmed
 - Tool activity: `⚙ name args` and `↳ result preview`
+- **Approval in the terminal**: `[approve] … [y/N]` prompts before permission-gated tools, so the default `workspace-write` policy works interactively
+- **Questions in the terminal**: `ask_user_question` renders questions and options; answer by number or free text
 - Session persistence: `--resume <sessionId>` resumes a prior session
 - Zero-build: `lib/` is checked in and ready to run
 
@@ -85,12 +87,16 @@ dsh-term/
 1. Reads the default model route, creates (or resumes) an Agent through `ctx.agents.create()` / `ctx.agents.resume()`, and installs the route with `installModelSelection`.
 2. Polls `agent.session.events` (the append-only `{ seq, time, type, data }` log) and renders `assistant/chunk`, `assistant/message`, `tool/call`, `tool/result`, and `turn/end` to stdout.
 3. Each input line becomes `agent.followup(createUserMessage(...))`; the driver waits for `agent.whenIdle()` before returning to the prompt.
-4. On exit: `sessions.flush()` + `handle.dispose()` + `ctx.appExit(0)`.
+4. Wires the terminal in as the harness's human answerer:
+   - Listens to `approval/request` (a waterfall event), renders `[approve] tool` + reason, reads y/N, and returns `allowed-once` / `rejected` / `cancelled`.
+   - Registers a `ctx.userQuestions.registerProvider(...)` provider that renders each question and its options, parses numbers/free text, and returns the structured answer.
+5. On exit: `sessions.flush()` + `handle.dispose()` + `ctx.appExit(0)`.
+
+All input goes through a rebuildable readline manager: `ask(prompt, signal)` reads one line and returns `line` / `interrupted` (Ctrl-C) / `aborted` (signal fired) / `closed` (EOF); interrupting rebuilds the readline interface so a dropped question never blocks later input.
 
 ## Known limitations
 
-- **Approval is not wired to the terminal yet**: `ask_user_question` / permission approval need an answerer, which this REPL does not register yet, so approval-gated tools fail closed. For fully autonomous runs set `DSH_PERMISSION_MODE=danger-full-access` (approval policy `never`).
-- **No mid-turn input**: the prompt returns only after the turn settles; steering is future work.
+- **No mid-turn steering**: you cannot inject a new instruction while a turn runs — Ctrl-C cancels the current turn instead; `agent.steer()` is future work.
 - **Color auto-degrades** on non-TTY / `NO_COLOR` / `TERM=dumb`.
 
 ## License
