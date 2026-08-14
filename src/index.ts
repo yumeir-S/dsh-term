@@ -375,6 +375,10 @@ async function run(ctx: Context, config: Config): Promise<void> {
   currentHandle = first.handle;
   selectionRef = first.ref;
 
+  // Persistent render cursor: each drive continues where the last one left
+  // off, so we never replay earlier turns (which caused duplicated answers).
+  let renderCursor = currentAgent.session.firstLiveSeq;
+
   const shutdown = async (code: number) => {
     if (shutdownStarted) return;
     shutdownStarted = true;
@@ -382,11 +386,27 @@ async function run(ctx: Context, config: Config): Promise<void> {
       offApproval();
       offQuestions?.();
       process.off("SIGINT", onProcessSigint);
-      await sessions.flush(currentAgent.session);
-      await currentHandle.dispose();
     } catch {
-      /* teardown is best-effort */
+      /* best-effort */
     }
+    // Stop the agent first so dispose converges instead of waiting on a
+    // long-running turn, then bound the teardown so we never hang forever.
+    try {
+      currentAgent.cancel({ kind: "user" });
+    } catch {
+      /* best-effort */
+    }
+    await Promise.race([
+      (async () => {
+        try {
+          await sessions.flush(currentAgent.session);
+          await currentHandle.dispose();
+        } catch {
+          /* best-effort */
+        }
+      })(),
+      new Promise((resolve) => setTimeout(resolve, 3000)),
+    ]);
     input.close();
     (ctx.get("appExit") as AppExit | undefined)?.(code);
   };
@@ -460,12 +480,11 @@ async function run(ctx: Context, config: Config): Promise<void> {
   const drive = async (message: UserMessage) => {
     const agent = currentAgent;
     running = true;
-    let cursor = agent.session.firstLiveSeq;
     const flushEvents = () => {
       const events = agent.session.events;
-      while (cursor < events.length) {
-        renderer.renderEvent(events[cursor]);
-        cursor += 1;
+      while (renderCursor < events.length) {
+        renderer.renderEvent(events[renderCursor]);
+        renderCursor += 1;
       }
     };
     agent.followup(message);
@@ -524,6 +543,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
       currentAgent = next.agent;
       currentHandle = next.handle;
       selectionRef = next.ref;
+      renderCursor = currentAgent.session.firstLiveSeq;
       stdout.write(paint.dim(`new session ${String(currentAgent.id)}\n\n`));
       continue;
     }
