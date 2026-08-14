@@ -25,21 +25,13 @@ Prerequisites:
 - the `dsh` CLI (`@deepseek-ai/dsh`), e.g. `npm i -g @deepseek-ai/dsh`
 - model credentials: `DEEPSEEK_API_KEY` (or `~/.dsh/.credentials.yaml`)
 
-Local development (try this first; edits take effect immediately):
-
-```sh
-cd dsh-term                # inside this repo
-pnpm install               # install dsh-term's deps (link does not install them)
-dsh plugin --profile term add link:.
-```
-
 From npm:
 
 ```sh
 dsh plugin --profile term add dsh-term
 ```
 
-From Git (after you push to GitHub):
+From Git:
 
 ```sh
 dsh plugin --profile term add github:<you>/dsh-term
@@ -65,7 +57,6 @@ In-REPL commands:
 | `/model` | show the current model |
 | `/model <provider> <model>` | switch the model from the next step |
 | `/models` | list registered providers and models |
-| Ctrl-C (while running) | cancel the current turn (or the current prompt) |
 
 ## Build from source
 
