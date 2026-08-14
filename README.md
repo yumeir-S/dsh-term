@@ -1,6 +1,6 @@
 # dsh-term
 
-中文 | [English](README.md)
+[中文](README.zh.md) | English
 
 `dsh-term` is an **interactive terminal (CLI/TUI) bundle** for DeepSeek Harness: chat with the coding agent directly in your terminal, no browser required.
 
