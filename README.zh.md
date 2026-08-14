@@ -34,7 +34,7 @@ dsh plugin --profile term add dsh-term
 从 Git 安装：
 
 ```sh
-dsh plugin --profile term add github:<you>/dsh-term
+dsh plugin --profile term add github:yumeir-S/dsh-term
 ```
 
 `dsh plugin` 会自动识别 `dsh-term` 声明了 `dsh.bundle.patch`，并把它追加到该 profile 的 `dsh.profile.bundles` 里。
