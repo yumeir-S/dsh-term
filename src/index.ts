@@ -80,6 +80,10 @@ const paint = {
   cyan: (text: string) => (supportsColor ? `\x1b[36m${text}\x1b[0m` : text),
   green: (text: string) => (supportsColor ? `\x1b[32m${text}\x1b[0m` : text),
   yellow: (text: string) => (supportsColor ? `\x1b[33m${text}\x1b[0m` : text),
+  bold: (text: string) => (supportsColor ? `\x1b[1m${text}\x1b[0m` : text),
+  blue: (text: string) => (supportsColor ? `\x1b[34m${text}\x1b[0m` : text),
+  magenta: (text: string) => (supportsColor ? `\x1b[35m${text}\x1b[0m` : text),
+  gray: (text: string) => (supportsColor ? `\x1b[90m${text}\x1b[0m` : text),
 };
 
 /** Collapse and truncate a raw JSON string for a one-line preview. */
@@ -110,17 +114,55 @@ const HELP_TEXT = `Commands:
   Ctrl-C                   cancel the current turn (or the current prompt) while running
 `;
 
-/** Create the terminal event renderer with streaming state. */
-function createRenderer() {
-  let textOpen = false;
-  let reasoningOpen = false;
+/** A lightweight line-level Markdown highlighter with code-block state. */
+function createMarkdown() {
+  let inCodeBlock = false;
 
-  const close = () => {
-    if (textOpen || reasoningOpen) {
-      stdout.write("\n");
-      textOpen = false;
-      reasoningOpen = false;
+  const inline = (text: string) =>
+    text
+      .replace(/\*\*([^*]+)\*\*/g, (_m, s) => paint.bold(s))
+      .replace(/`([^`]+)`/g, (_m, s) => paint.cyan(s));
+
+  const renderLine = (line: string) => {
+    if (/^\s*```/.test(line)) {
+      inCodeBlock = !inCodeBlock;
+      return paint.gray("```");
     }
+    if (inCodeBlock) return paint.dim(`  ${line}`);
+    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (heading) return paint.bold(paint.blue(heading[2]));
+    const quote = /^>\s?(.*)$/.exec(line);
+    if (quote) return paint.gray(`│ ${inline(quote[1])}`);
+    const bullet = /^(\s*)[-*]\s+(.*)$/.exec(line);
+    if (bullet) return `${bullet[1]}${paint.cyan("·")} ${inline(bullet[2])}`;
+    const numbered = /^(\s*)(\d+)\.\s+(.*)$/.exec(line);
+    if (numbered) return `${numbered[1]}${paint.cyan(`${numbered[2]}.`)} ${inline(numbered[3])}`;
+    return inline(line);
+  };
+
+  return { renderLine };
+}
+
+/** Create the terminal event renderer with streaming + markdown + tool cards. */
+function createRenderer() {
+  const md = createMarkdown();
+  let mode: "none" | "text" | "reasoning" = "none";
+  let buffer = "";
+
+  const newline = () => stdout.write("\n");
+
+  const flushBuffer = () => {
+    if (buffer !== "") {
+      stdout.write(md.renderLine(buffer));
+      buffer = "";
+      newline();
+    }
+  };
+
+  const finish = () => {
+    if (mode === "reasoning") newline();
+    else if (mode === "text") flushBuffer();
+    mode = "none";
   };
 
   const renderEvent = (event: SessionEvent) => {
@@ -128,45 +170,48 @@ function createRenderer() {
       case "assistant/chunk": {
         const chunk = event.data.chunk;
         if (chunk.type === "text-delta") {
-          if (reasoningOpen) close();
-          stdout.write(chunk.text);
-          textOpen = true;
+          if (mode === "reasoning") newline();
+          mode = "text";
+          buffer += chunk.text;
+          let idx;
+          while ((idx = buffer.indexOf("\n")) >= 0) {
+            const line = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 1);
+            stdout.write(md.renderLine(line) + "\n");
+          }
         } else if (chunk.type === "reasoning-delta") {
-          if (textOpen) close();
-          if (!reasoningOpen) stdout.write(paint.dim("  · "));
-          stdout.write(paint.dim(chunk.text));
-          reasoningOpen = true;
+          if (mode === "text") flushBuffer();
+          if (mode !== "reasoning") stdout.write(paint.dim("✳ Thinking… "));
+          mode = "reasoning";
         }
         break;
       }
       case "assistant/message": {
-        close();
+        finish();
         break;
       }
       case "tool/call": {
-        close();
+        finish();
         const args = compactJson(event.data.arguments);
         stdout.write(
-          paint.dim(`  ⚙ ${event.data.name}${args === "" ? "" : ` ${args}`}\n`),
+          `  ${paint.yellow("⚙")} ${paint.bold(event.data.name)}${args === "" ? "" : paint.gray(` ${args}`)}\n`,
         );
         break;
       }
       case "tool/result": {
-        close();
-        stdout.write(paint.dim(`  ↳ ${resultPreview(event.data.message)}\n`));
+        finish();
+        stdout.write(`  ${paint.green("✓")} ${paint.dim(resultPreview(event.data.message))}\n`);
         break;
       }
       case "turn/end": {
-        close();
+        finish();
         const reason = event.data.reason;
         if (reason.kind === "error") {
           stdout.write(
-            paint.red(
-              `  ✖ ${reason.error.code ?? "ERROR"}: ${reason.error.message ?? ""}\n`,
-            ),
+            `  ${paint.red("✖")} ${paint.red(`${reason.error.code ?? "ERROR"}: ${reason.error.message ?? ""}`)}\n`,
           );
         } else if (reason.kind === "aborted") {
-          stdout.write(paint.dim("  ⏹ cancelled\n"));
+          stdout.write(paint.gray("  ⏹ cancelled\n"));
         }
         break;
       }
@@ -175,7 +220,7 @@ function createRenderer() {
     }
   };
 
-  return { renderEvent, close };
+  return { renderEvent, close: finish };
 }
 
 /**
@@ -362,9 +407,9 @@ async function run(ctx: Context, config: Config): Promise<void> {
   const offApproval = ctx.on("approval/request", async (req: ApprovalRequest, next) => {
     if (req.agent !== currentAgent) return next();
     renderer.close();
-    stdout.write(paint.yellow(`[approve] ${req.toolName}\n`));
-    if (req.reason !== undefined) stdout.write(paint.dim(`  ${req.reason}\n`));
-    const res = await input.ask(paint.dim("  allow? [y/N] "), req.signal);
+    stdout.write(`\n  ${paint.yellow("⚠")} ${paint.bold(req.toolName)}\n`);
+    if (req.reason !== undefined) stdout.write(paint.gray(`    ${req.reason}\n`));
+    const res = await input.ask(`  ${paint.yellow("Allow?")} ${paint.gray("[y/N] ")}`, req.signal);
     if (res.kind !== "line") return "cancelled" satisfies ApprovalOutcome;
     const answer = res.line.trim().toLowerCase();
     return (answer === "y" || answer === "yes" ? "allowed-once" : "rejected") satisfies ApprovalOutcome;
@@ -380,11 +425,11 @@ async function run(ctx: Context, config: Config): Promise<void> {
       const answers = [];
       for (const question of request.questions) {
         if (question.header !== undefined) {
-          stdout.write(paint.cyan(`\n${question.header}\n`));
+          stdout.write(paint.bold(paint.cyan(`\n${question.header}\n`)));
         }
-        stdout.write(`${question.question}\n`);
+        stdout.write(paint.bold(`${question.question}\n`));
         if (question.detail !== undefined) {
-          stdout.write(paint.dim(`${question.detail}\n`));
+          stdout.write(paint.gray(`${question.detail}\n`));
         }
         const options = question.options ?? [];
         if (options.length > 0) {
@@ -392,9 +437,9 @@ async function run(ctx: Context, config: Config): Promise<void> {
             const option = options[i];
             const description =
               option.description !== undefined
-                ? paint.dim(` — ${option.description}`)
+                ? paint.gray(` — ${option.description}`)
                 : "";
-            stdout.write(`  ${i + 1}) ${option.label}${description}\n`);
+            stdout.write(`  ${paint.cyan(`${i + 1}`)}) ${option.label}${description}\n`);
           }
         }
         const res = await input.ask(paint.cyan("  > "), request.signal);
@@ -432,11 +477,11 @@ async function run(ctx: Context, config: Config): Promise<void> {
   };
 
   stdout.write(
-    paint.cyan("dsh-term") +
-      paint.dim(" · DeepSeek Harness terminal\n") +
-      paint.dim(`model: ${modelLine(selectionRef)}\n`) +
-      paint.dim(`session ${String(currentAgent.id)}\n`) +
-      paint.dim("Type /help for commands, /exit or Ctrl-D to quit.\n\n"),
+    paint.bold(paint.cyan("dsh-term")) +
+      paint.gray(" · DeepSeek Harness terminal\n") +
+      paint.gray(`model: ${modelLine(selectionRef)}\n`) +
+      paint.gray(`session ${String(currentAgent.id)}\n`) +
+      paint.gray("Type /help for commands, /exit or Ctrl-D to quit.\n\n"),
   );
 
   // Optional first task.
@@ -447,7 +492,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
 
   // REPL.
   while (!exiting) {
-    const res = await input.ask(paint.cyan("› "));
+    const res = await input.ask(paint.cyan("❯ "));
     if (res.kind !== "line") {
       exiting = true;
       break;
