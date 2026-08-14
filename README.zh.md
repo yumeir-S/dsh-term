@@ -57,7 +57,6 @@ REPL 内命令：
 | `/model` | 显示当前模型 |
 | `/model <provider> <model>` | 从下一步起切换模型 |
 | `/models` | 列出已注册的 provider 与模型 |
-| Ctrl-C（运行中） | 取消当前轮次（或当前提示） |
 
 ## 从源码构建
 
