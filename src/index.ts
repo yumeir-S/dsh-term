@@ -401,6 +401,11 @@ async function run(ctx: Context, config: Config): Promise<void> {
     void shutdown(0);
   };
 
+  // Take over SIGINT: the dsh launcher installs its own SIGINT handler that
+  // disposes the whole tree and exits the process. We replace it with
+  // "cancel the current turn while running, exit when idle" — the readline
+  // interface still owns Ctrl-C at the prompt via its own 'SIGINT' event.
+  process.removeAllListeners("SIGINT");
   process.on("SIGINT", onProcessSigint);
 
   // Approval answerer: one y/N prompt per permission-gated action.
