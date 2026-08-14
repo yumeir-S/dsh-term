@@ -1,0 +1,30 @@
+# The dsh-term bundle patch: an interactive terminal (CLI/TUI) chat over
+# dsh-base. It mounts no Host, HTTP server, Web runtime, or browser plugin.
+#
+# An ordinary provider plugin (`term-startup`) injects `cmdlineArgs`, parses
+# the optional first task and `--resume <sessionId>`, and publishes the
+# `termStartup` service. The interactive driver (`term-runner`) reads that
+# service, creates (or resumes) one Agent through the core registry, and runs
+# a readline REPL that streams the agent's session events to stdout.
+
+- id: system-prompt
+  config:
+    persona: >-
+      You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
+
+# The shared module-reload HMR row stays off; the launcher's watch-only
+# fallback still keeps the user patch layers live until the run exits.
+- id: hmr
+  disabled: true
+
+- insert:
+    - id: term-startup
+      name: 'dsh-term/startup'
+
+    # Reads its invocation from the ordinary termStartup provider.
+    - id: term-runner
+      name: 'dsh-term'
+      inject: [termStartup]
+      config:
+        task: !!js ctx.termStartup.task
+        resumeSessionId: !!js ctx.termStartup.resumeSessionId
