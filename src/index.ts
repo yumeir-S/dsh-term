@@ -309,13 +309,17 @@ async function run(ctx: Context, config: Config): Promise<void> {
         ? await agents.resume({
             resumeSessionId: SessionId(resumeId),
             agentOptions: { provider: selection.provider, model: selection.model },
-            setup: (agentCtx) => installModelSelection(agentCtx, ref),
+            setup: (agentCtx) => {
+              installModelSelection(agentCtx, ref);
+            },
           })
         : await agents.create({
             sessionId: SessionId(`session-${randomUUID()}`),
             meta: { cwd: process.cwd() },
             agentOptions: { provider: selection.provider, model: selection.model },
-            setup: (agentCtx) => installModelSelection(agentCtx, ref),
+            setup: (agentCtx) => {
+              installModelSelection(agentCtx, ref);
+            },
           });
     await handle.agent.whenIdle();
     return { agent: handle.agent, handle, ref };
