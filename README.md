@@ -52,7 +52,11 @@ In-REPL commands:
 |---|---|
 | `/help` | show help |
 | `/exit` / `/quit` | save and exit (Ctrl-D works too) |
-| Ctrl-C (while running) | cancel the current turn |
+| `/new` | start a fresh session (keeps the current model) |
+| `/model` | show the current model |
+| `/model <provider> <model>` | switch the model from the next step |
+| `/models` | list registered providers and models |
+| Ctrl-C (while running) | cancel the current turn (or the current prompt) |
 
 ## Build from source
 

@@ -18,9 +18,9 @@ import { stdin, stdout } from "node:process";
 import type { Context } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
 import { installModelSelection } from "@deepseek-ai/dsh-agent";
-import type { Agent, AgentHandle, AgentRegistry, ModelSelection } from "@deepseek-ai/dsh-agent";
+import type { Agent, AgentHandle, AgentRegistry, ModelSelection, ModelSelectionRef } from "@deepseek-ai/dsh-agent";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
-import type { ToolResultMessage, UserMessage } from "@deepseek-ai/dsh-llm";
+import type { LlmModelInfo, LlmProviderInfo, ToolResultMessage, UserMessage } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
 import type { Session, SessionEvent } from "@deepseek-ai/dsh-session";
 import type { ApprovalOutcome, ApprovalRequest } from "@deepseek-ai/dsh-user-approval";
@@ -54,6 +54,12 @@ interface AgentDefaultModel {
 /** The subset of `dsh-session` the runner reads. */
 interface SessionStoreLike {
   flush(session: Session): Promise<void>;
+}
+
+/** The subset of `dsh-llm` the runner reads for `/models`. */
+interface LlmCatalogLike {
+  listProviders(): LlmProviderInfo[];
+  listModels(provider: string): Promise<readonly LlmModelInfo[]>;
 }
 
 /** Result of one terminal input read. */
@@ -95,9 +101,13 @@ function resultPreview(message: ToolResultMessage, max = 120): string {
 }
 
 const HELP_TEXT = `Commands:
-  /help          show this help
-  /exit, /quit   save and exit (Ctrl-D also works)
-  Ctrl-C         cancel the current turn (or the current prompt) while running
+  /help                    show this help
+  /exit, /quit             save and exit (Ctrl-D also works)
+  /new                     start a fresh session (keeps the current model)
+  /model                   show the current model
+  /model <provider> <model>  switch the model from the next step
+  /models                  list registered providers and models
+  Ctrl-C                   cancel the current turn (or the current prompt) while running
 `;
 
 /** Create the terminal event renderer with streaming state. */
@@ -260,6 +270,12 @@ function parseAnswer(question: AskUserQuestionItem, text: string) {
   return { id: question.id, selected, ...(custom !== undefined ? { custom } : {}) };
 }
 
+/** The current-model line shown by the banner and `/model`. */
+function modelLine(selection: ModelSelectionRef): string {
+  const current = selection.current;
+  return current === undefined ? "unknown" : `${current.model} (${current.provider})`;
+}
+
 /**
  * Run the interactive driver: create/resume an Agent, wire the terminal in as
  * the approval and user-questions answerer, stream events, and loop over
@@ -273,42 +289,42 @@ async function run(ctx: Context, config: Config): Promise<void> {
   const sessions = ctx.get("sessions") as SessionStoreLike | undefined;
   if (agents === undefined || defaultModel === undefined || sessions === undefined) return;
 
-  const selection = defaultModel.currentSelection();
-  const resumeId = config.resumeSessionId.trim();
-
-  const handle: AgentHandle =
-    resumeId !== ""
-      ? await agents.resume({
-          resumeSessionId: SessionId(resumeId),
-          agentOptions: { provider: selection.provider, model: selection.model },
-          setup: (agentCtx) => {
-            installModelSelection(agentCtx, {
-              current: selection,
-              assembled: undefined,
-            });
-          },
-        })
-      : await agents.create({
-          sessionId: SessionId(`session-${randomUUID()}`),
-          meta: { cwd: process.cwd() },
-          agentOptions: { provider: selection.provider, model: selection.model },
-          setup: (agentCtx) => {
-            installModelSelection(agentCtx, {
-              current: selection,
-              assembled: undefined,
-            });
-          },
-        });
-
-  const agent: Agent = handle.agent;
-  await agent.whenIdle();
-
   const renderer = createRenderer();
   const input = createInput();
 
   let running = false;
   let exiting = false;
   let shutdownStarted = false;
+
+  // Mutable current-agent state, replaced by `/new`.
+  let currentAgent!: Agent;
+  let currentHandle!: AgentHandle;
+  let selectionRef!: ModelSelectionRef;
+
+  const createAgent = async (resumeId: string, preferred?: ModelSelection) => {
+    const selection = preferred ?? defaultModel.currentSelection();
+    const ref: ModelSelectionRef = { current: selection, assembled: undefined };
+    const handle: AgentHandle =
+      resumeId !== ""
+        ? await agents.resume({
+            resumeSessionId: SessionId(resumeId),
+            agentOptions: { provider: selection.provider, model: selection.model },
+            setup: (agentCtx) => installModelSelection(agentCtx, ref),
+          })
+        : await agents.create({
+            sessionId: SessionId(`session-${randomUUID()}`),
+            meta: { cwd: process.cwd() },
+            agentOptions: { provider: selection.provider, model: selection.model },
+            setup: (agentCtx) => installModelSelection(agentCtx, ref),
+          });
+    await handle.agent.whenIdle();
+    return { agent: handle.agent, handle, ref };
+  };
+
+  const first = await createAgent(config.resumeSessionId.trim(), undefined);
+  currentAgent = first.agent;
+  currentHandle = first.handle;
+  selectionRef = first.ref;
 
   const shutdown = async (code: number) => {
     if (shutdownStarted) return;
@@ -317,8 +333,8 @@ async function run(ctx: Context, config: Config): Promise<void> {
       offApproval();
       offQuestions?.();
       process.off("SIGINT", onProcessSigint);
-      await sessions.flush(agent.session);
-      await handle.dispose();
+      await sessions.flush(currentAgent.session);
+      await currentHandle.dispose();
     } catch {
       /* teardown is best-effort */
     }
@@ -329,7 +345,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
   const onProcessSigint = () => {
     if (exiting) return;
     if (running) {
-      agent.cancel({ kind: "user" });
+      currentAgent.cancel({ kind: "user" });
       return;
     }
     exiting = true;
@@ -340,7 +356,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
 
   // Approval answerer: one y/N prompt per permission-gated action.
   const offApproval = ctx.on("approval/request", async (req: ApprovalRequest, next) => {
-    if (req.agent !== agent) return next();
+    if (req.agent !== currentAgent) return next();
     renderer.close();
     stdout.write(paint.yellow(`[approve] ${req.toolName}\n`));
     if (req.reason !== undefined) stdout.write(paint.dim(`  ${req.reason}\n`));
@@ -388,6 +404,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
   });
 
   const drive = async (message: UserMessage) => {
+    const agent = currentAgent;
     running = true;
     let cursor = agent.session.firstLiveSeq;
     const flushEvents = () => {
@@ -410,14 +427,11 @@ async function run(ctx: Context, config: Config): Promise<void> {
     running = false;
   };
 
-  // Banner.
-  const sessionLine =
-    resumeId !== "" ? `resumed ${resumeId}` : `session ${String(agent.id)}`;
   stdout.write(
     paint.cyan("dsh-term") +
       paint.dim(" · DeepSeek Harness terminal\n") +
-      paint.dim(`model: ${selection.model} (${selection.provider})\n`) +
-      paint.dim(`${sessionLine}\n`) +
+      paint.dim(`model: ${modelLine(selectionRef)}\n`) +
+      paint.dim(`session ${String(currentAgent.id)}\n`) +
       paint.dim("Type /help for commands, /exit or Ctrl-D to quit.\n\n"),
   );
 
@@ -435,6 +449,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
       break;
     }
     const trimmed = res.line.trim();
+
     if (trimmed === "") continue;
     if (trimmed === "/exit" || trimmed === "/quit") {
       exiting = true;
@@ -444,6 +459,58 @@ async function run(ctx: Context, config: Config): Promise<void> {
       stdout.write(HELP_TEXT + "\n");
       continue;
     }
+    if (trimmed === "/new") {
+      try {
+        await sessions.flush(currentAgent.session);
+        await currentHandle.dispose();
+      } catch {
+        /* keep going */
+      }
+      const next = await createAgent("", selectionRef.current ?? undefined);
+      currentAgent = next.agent;
+      currentHandle = next.handle;
+      selectionRef = next.ref;
+      stdout.write(paint.dim(`new session ${String(currentAgent.id)}\n\n`));
+      continue;
+    }
+    if (trimmed === "/model") {
+      stdout.write(paint.dim(`current model: ${modelLine(selectionRef)}\n`));
+      continue;
+    }
+    if (trimmed.startsWith("/model ")) {
+      const parts = trimmed.slice("/model ".length).trim().split(/\s+/);
+      if (parts.length !== 2) {
+        stdout.write(paint.dim("usage: /model <provider> <model>   (try /models to list)\n"));
+        continue;
+      }
+      selectionRef.current = { provider: parts[0], model: parts[1] };
+      stdout.write(paint.dim(`model → ${parts[1]} (${parts[0]}) from the next step\n`));
+      continue;
+    }
+    if (trimmed === "/models") {
+      const llm = ctx.get("llm") as LlmCatalogLike | undefined;
+      if (llm === undefined) {
+        stdout.write(paint.dim("llm service unavailable\n"));
+        continue;
+      }
+      const providers = llm.listProviders();
+      if (providers.length === 0) {
+        stdout.write(paint.dim("no providers registered\n"));
+        continue;
+      }
+      for (const provider of providers) {
+        stdout.write(paint.cyan(`${provider.name} (${provider.id})\n`));
+        const models = await llm.listModels(provider.id).catch(() => []);
+        for (const model of models) {
+          const current =
+            selectionRef.current?.provider === provider.id &&
+            selectionRef.current?.model === model.id;
+          stdout.write(paint.dim(`  - ${model.id}${current ? "  ← current" : ""}\n`));
+        }
+      }
+      continue;
+    }
+
     await drive(userLine(res.line));
   }
 
